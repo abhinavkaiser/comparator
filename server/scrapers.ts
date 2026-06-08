@@ -99,8 +99,9 @@ export async function comparePrices(request: CompareRequest): Promise<CompareRes
     if (item.status === "fulfilled") return item.value;
     return unavailableResult(stores[index], request, item.reason instanceof Error ? item.reason.message : undefined);
   });
+  const comparableResults = enforceComparableProducts(results, request);
 
-  const liveWithPrice = results.filter((result) => result.status === "live" && typeof result.price === "number");
+  const liveWithPrice = comparableResults.filter((result) => result.status === "live" && typeof result.price === "number");
   const best = liveWithPrice.reduce<StoreResult | undefined>((current, result) => {
     if (!current || Number(result.price) < Number(current.price)) return result;
     return current;
@@ -110,7 +111,7 @@ export async function comparePrices(request: CompareRequest): Promise<CompareRes
     query: request.query,
     pincode: request.pincode,
     bestStoreId: best?.storeId,
-    results: results.sort((a, b) => Number(a.price ?? Infinity) - Number(b.price ?? Infinity))
+    results: comparableResults.sort((a, b) => Number(a.price ?? Infinity) - Number(b.price ?? Infinity))
   };
 }
 
@@ -1129,6 +1130,104 @@ function cleanText(value: string): string {
 
 function inferUnit(value: string): string | undefined {
   return value.match(/\b\d+\s?(?:g|kg|ml|l|pcs|pack|piece)\b/i)?.[0];
+}
+
+function enforceComparableProducts(results: StoreResult[], request: CompareRequest): StoreResult[] {
+  const reference = results.find((result) => result.status === "live" && result.price !== null && isStrongProductMatch(result.productName, request.query));
+  if (!reference) return results;
+
+  return results.map((result) => {
+    if (result.status !== "live" || result.price === null || result.storeId === reference.storeId) return result;
+    const mismatch = productMismatchReason(reference, result, request.query);
+    if (!mismatch) return result;
+
+    return {
+      ...result,
+      price: null,
+      mrp: null,
+      status: "unavailable",
+      note: `Not available as a comparable item: ${mismatch}.`
+    };
+  });
+}
+
+function productMismatchReason(reference: StoreResult, candidate: StoreResult, query: string): string | null {
+  const ref = productSignature(reference.productName, reference.unit);
+  const item = productSignature(candidate.productName, candidate.unit);
+
+  if (ref.format && item.format && ref.format !== item.format) {
+    return `different format (${item.format} vs ${ref.format})`;
+  }
+
+  if (ref.variant && item.variant && ref.variant !== item.variant) {
+    return `different variant (${titleCase(item.variant)} vs ${titleCase(ref.variant)})`;
+  }
+
+  const querySignature = productSignature(query);
+  if (querySignature.variant && item.variant && item.variant !== querySignature.variant) {
+    return `different variant (${titleCase(item.variant)} vs ${titleCase(querySignature.variant)})`;
+  }
+
+  if (ref.quantity && item.quantity && ref.quantity.unit === item.quantity.unit) {
+    const ratio = item.quantity.value / ref.quantity.value;
+    if (ratio < 0.75 || ratio > 1.35) {
+      return `different pack size (${formatQuantity(item.quantity)} vs ${formatQuantity(ref.quantity)})`;
+    }
+  }
+
+  return null;
+}
+
+function productSignature(name: string, unit?: string): {
+  variant?: string;
+  format?: string;
+  quantity?: { value: number; unit: string };
+} {
+  const text = `${name} ${unit ?? ""}`.toLowerCase();
+  const variant = firstKnownToken(text, [
+    "original",
+    "lionpride",
+    "lion pride",
+    "nomad",
+    "amber",
+    "musk",
+    "swagger",
+    "captain",
+    "fresh",
+    "sport"
+  ]);
+  const quantity = parseQuantity(text);
+  let format: string | undefined;
+
+  if (/\bstick\b/.test(text)) {
+    format = "stick";
+  } else if (/\broll[ -]?on\b/.test(text)) {
+    format = "roll-on";
+  } else if (/\b(body\s*)?spray\b/.test(text) || (/\bdeodorant\b/.test(text) && quantity?.unit === "ml" && quantity.value >= 100)) {
+    format = "spray";
+  }
+
+  return { variant, format, quantity };
+}
+
+function firstKnownToken(text: string, tokens: string[]): string | undefined {
+  return tokens.find((token) => new RegExp(`\\b${escapeRegExp(token)}\\b`, "i").test(text))?.replace(/\s+/g, " ");
+}
+
+function parseQuantity(text: string): { value: number; unit: string } | undefined {
+  const match = text.replace(/,/g, "").match(/\b(\d+(?:\.\d+)?)\s?(ml|l|g|kg|pcs|pieces?)\b/i);
+  if (!match) return undefined;
+  const unit = match[2].toLowerCase().replace(/^pieces?$/, "pcs");
+  let value = Number(match[1]);
+  if (!Number.isFinite(value)) return undefined;
+  if (unit === "l") value *= 1000;
+  if (unit === "kg") value *= 1000;
+  return { value, unit: unit === "l" ? "ml" : unit === "kg" ? "g" : unit };
+}
+
+function formatQuantity(quantity: { value: number; unit: string }): string {
+  const value = Number.isInteger(quantity.value) ? String(quantity.value) : quantity.value.toFixed(1);
+  return `${value} ${quantity.unit}`;
 }
 
 function isLikelyProductMatch(productName: string, query: string): boolean {
