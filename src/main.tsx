@@ -34,14 +34,6 @@ type CompareResponse = {
   results: StoreResult[];
 };
 
-const storeUrlFields = [
-  { id: "blinkit", label: "Blinkit URL" },
-  { id: "amazon-now", label: "Amazon Now URL" },
-  { id: "zepto", label: "Zepto URL" },
-  { id: "big-basket", label: "BigBasket URL" },
-  { id: "flipkart-minutes", label: "Flipkart Minutes URL" }
-];
-
 const formatter = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
@@ -51,14 +43,6 @@ const formatter = new Intl.NumberFormat("en-IN", {
 function App() {
   const [query, setQuery] = useState("Amul Taaza Homogenised Toned Milk");
   const [pincode, setPincode] = useState("560001");
-  const [exactUrls, setExactUrls] = useState<Record<string, string>>({
-    blinkit: "",
-    "amazon-now": "",
-    zepto:
-      "https://www.zepto.com/pn/amul-taaza-homogenised-toned-milk-tetra-pack/pvid/84eae511-5edb-4a22-875e-5aa94976c2d6",
-    "big-basket": "",
-    "flipkart-minutes": ""
-  });
   const [data, setData] = useState<CompareResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -77,7 +61,7 @@ function App() {
       const response = await fetch("/api/compare", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query, pincode, exactUrls })
+        body: JSON.stringify({ query, pincode })
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Could not compare prices.");
@@ -132,24 +116,6 @@ function App() {
             Compare
           </button>
         </form>
-
-        <section className="url-panel">
-          {storeUrlFields.map((field) => (
-            <label key={field.id}>
-              <span>{field.label}</span>
-              <div className="input-wrap">
-                <ExternalLink aria-hidden="true" />
-                <input
-                  value={exactUrls[field.id] ?? ""}
-                  onChange={(event) =>
-                    setExactUrls((current) => ({ ...current, [field.id]: event.target.value }))
-                  }
-                  placeholder="Paste exact product URL"
-                />
-              </div>
-            </label>
-          ))}
-        </section>
 
         {error && (
           <div className="notice error">
