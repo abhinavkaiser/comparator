@@ -178,7 +178,7 @@ async function scrapeBlinkitSearchWithBrowser(
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(3500);
 
-    const product = await page.evaluate(() => {
+    const products = await page.evaluate(() => {
       const cards = Array.from(document.querySelectorAll<HTMLElement>('[role="button"][id]'))
         .filter((element) => /^\d+$/.test(element.id))
         .map((element) => {
@@ -200,8 +200,13 @@ async function scrapeBlinkitSearchWithBrowser(
           };
         });
 
-      return cards[0] ?? null;
+      return cards;
     });
+
+    const product = products
+      .map((item) => ({ ...item, score: productMatchScore(item.name, request.query) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)[0];
 
     if (!product?.id || !product.name || !product.priceText) {
       return unavailableResult(store, request, "Blinkit search did not expose a matching product card in browser data.");
@@ -313,7 +318,10 @@ async function scrapeAmazonSearchWithBrowser(
         .filter((product) => product.asin && (product.title || product.text));
     });
 
-    const product = products.find((item) => isStrongProductMatch(`${item.title} ${item.text}`, request.query));
+    const product = products
+      .map((item) => ({ ...item, score: productMatchScore(`${item.title} ${item.text}`, request.query) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)[0];
     if (!product) {
       return unavailableResult(store, request, "Amazon search did not return a sufficiently matching product.");
     }
@@ -1024,7 +1032,8 @@ function cleanAmazonTitle(value: string): string {
 function extractAmazonCardName(text: string, fallback: string): string {
   const withoutPrice = text.replace(/\s+Price,\s*product page.*$/i, "");
   const withoutRating = withoutPrice.replace(/\s+\d(?:\.\d)?\s+\d(?:\.\d)?\s+out\s+of\s+5\s+stars.*$/i, "");
-  return cleanAmazonTitle(withoutRating || fallback);
+  const withoutAvailability = withoutRating.replace(/\s+\d+[A-Z+]*\s+bought\s+in\s+past\s+month.*$/i, "");
+  return cleanAmazonTitle(withoutAvailability || fallback);
 }
 
 function cleanFlipkartTitle(value: string): string {
@@ -1066,6 +1075,8 @@ function isLikelyProductMatch(productName: string, query: string): boolean {
 }
 
 function isStrongProductMatch(productName: string, query: string): boolean {
+  if (productMatchScore(productName, query) >= 50) return true;
+
   const ignored = new Set(["the", "and", "for", "with", "pack", "of", "no"]);
   const title = cleanText(productName).toLowerCase();
   const tokens = query
@@ -1078,6 +1089,40 @@ function isStrongProductMatch(productName: string, query: string): boolean {
   const matched = tokens.filter((token) => title.includes(token));
   const required = Math.min(tokens.length, Math.max(2, Math.ceil(tokens.length * 0.55)));
   return matched.length >= required;
+}
+
+function productMatchScore(productName: string, query: string): number {
+  const title = cleanText(productName).toLowerCase();
+  const normalizedQuery = cleanText(query).toLowerCase();
+  const tokens = normalizedQuery.split(/[^a-z0-9]+/).filter((token) => token.length > 2);
+
+  if (!title || !tokens.length) return 0;
+  if (title === normalizedQuery) return 120;
+
+  if (tokens.length === 1) {
+    const token = tokens[0];
+    const word = new RegExp(`\\b${escapeRegExp(token)}\\b`, "i");
+    if (!word.test(title)) return 0;
+
+    let score = 50;
+    if (title.startsWith(`${token} `) || title.startsWith(token)) score += 35;
+    if (title.endsWith(` ${token}`) || title.endsWith(token)) score += 25;
+    if (
+      /\b(chips|cookies?|biscuit|juice|cake|mix|snack|powder|flavour|flavored|dried|dry|dehydrated|storage|container|box|case|lunch|travel|plastic|holder)\b/i.test(
+        title
+      )
+    ) {
+      score -= 45;
+    }
+    return score;
+  }
+
+  const matched = tokens.filter((token) => title.includes(token)).length;
+  return Math.round((matched / tokens.length) * 100);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function unavailableProductResult(
