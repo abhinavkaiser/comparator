@@ -57,7 +57,8 @@ const stores: StoreConfig[] = [
   {
     id: "amazon-now",
     name: "Amazon Now",
-    searchUrl: (query) => `https://www.amazon.in/s?k=${encodeURIComponent(query)}`,
+    searchUrl: (query) =>
+      `https://www.amazon.in/s?k=${encodeURIComponent(query)}&s=nowstore&fpw=alm&almBrandId=ctnow`,
     priceSelectors: [".a-price-whole", ".a-price .a-offscreen", "[class*='price']"],
     titleSelectors: [".a-size-medium.a-color-base.a-text-normal", "h2", "[class*='title']"],
     productLinkSelectors: ["a.a-link-normal.s-no-outline[href*='/dp/']", "a[href*='/dp/']", "h2 a[href]"],
@@ -155,8 +156,11 @@ async function scrapeStore(store: StoreConfig, request: CompareRequest): Promise
   }
 
   if (store.id === "zepto") {
-    const searchResult = await scrapeZeptoSearch(store, request, searchUrl);
+    const searchResult = await scrapeZeptoSearchWithBrowser(store, request, searchUrl);
     if (searchResult.price !== null && searchResult.productUrl) return searchResult;
+
+    const serverResult = await scrapeZeptoSearch(store, request, searchUrl);
+    if (serverResult.price !== null && serverResult.productUrl) return serverResult;
     return searchResult;
   }
 
@@ -422,34 +426,37 @@ async function scrapeFlipkartSearchWithBrowser(
     await page.waitForTimeout(3500);
 
     const products = await page.evaluate(() => {
-      const seen = new Set<string>();
-      return Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/p/"][href*="pid="]'))
-        .map((link) => {
-          const url = new URL(link.href);
-          const pid = url.searchParams.get("pid") ?? "";
-          if (!pid || seen.has(pid)) return null;
-          seen.add(pid);
+      const grouped = new Map<string, { pid: string; href: string; texts: string[] }>();
 
-          const title = (link.innerText || link.textContent || "").replace(/\s+/g, " ").trim();
-          let card: HTMLElement | null = link;
-          for (let index = 0; index < 5 && card?.parentElement; index += 1) {
-            const text = (card.parentElement.innerText || "").replace(/\s+/g, " ").trim();
-            if (/₹\d/.test(text) && text.length > title.length) {
-              card = card.parentElement;
-              break;
-            }
-            card = card.parentElement;
-          }
+      Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/p/"][href*="pid="]')).forEach((link) => {
+        const url = new URL(link.href);
+        const pid = url.searchParams.get("pid") ?? "";
+        if (!pid) return;
 
-          const text = (card?.innerText || title).replace(/\s+/g, " ").trim();
-          const priceText = text.match(/₹\s*[\d,]+(?:\.\d{1,2})?/)?.[0] ?? "";
+        const existing = grouped.get(pid) ?? { pid, href: link.href, texts: [] };
+        const text = (link.innerText || link.textContent || "").replace(/\s+/g, " ").trim();
+        if (text) existing.texts.push(text);
+        grouped.set(pid, existing);
+      });
 
-          return { pid, title, href: link.href, priceText, text };
-        })
-        .filter((product): product is { pid: string; title: string; href: string; priceText: string; text: string } => Boolean(product));
+      return Array.from(grouped.values()).map((item) => {
+        const title =
+          item.texts.find((text) => !/^currently unavailable$/i.test(text) && !/^₹/.test(text) && /[a-z]/i.test(text)) ?? "";
+        const priceText = item.texts.find((text) => /^₹\s*[\d,]+(?:\.\d{1,2})?/.test(text)) ?? "";
+        return {
+          pid: item.pid,
+          title,
+          href: item.href,
+          priceText,
+          text: item.texts.join(" ")
+        };
+      });
     });
 
-    const product = products.find((item) => isStrongProductMatch(item.title || item.text, request.query));
+    const product = products
+      .map((item) => ({ ...item, score: productMatchScore(item.title || item.text, request.query) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)[0];
     if (!product) {
       return unavailableResult(store, request, "Flipkart search did not return a sufficiently matching product.");
     }
@@ -524,6 +531,64 @@ async function scrapeFlipkartProductWithBrowser(
       productUrl: canonicalUrl,
       searchUrl,
       status: "live",
+      checkedAt: new Date().toISOString()
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
+async function scrapeZeptoSearchWithBrowser(
+  store: StoreConfig,
+  request: CompareRequest,
+  searchUrl: string
+): Promise<StoreResult> {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ userAgent: browserUserAgent });
+    await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(3500);
+
+    const products = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/pn/"][href*="/pvid/"]'))
+        .map((link) => {
+          const text = (link.innerText || link.textContent || "").replace(/\s+/g, " ").trim();
+          const prices = text.match(/₹\s*[\d,]+(?:\.\d{1,2})?/g) ?? [];
+          const path = new URL(link.href).pathname;
+          const slug = path.match(/\/pn\/([^/]+)\/pvid\//)?.[1] ?? "";
+          return {
+            text,
+            slug,
+            href: link.href,
+            priceText: prices[0] ?? "",
+            mrpText: prices[1] ?? ""
+          };
+        })
+        .filter((product) => product.slug && product.priceText);
+    });
+
+    const product = products
+      .map((item) => ({ ...item, name: titleFromSlug(item.slug), score: productMatchScore(titleFromSlug(item.slug), request.query) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)[0];
+
+    if (!product) {
+      return unavailableResult(store, request, "Zepto search did not expose a matching product card in browser data.");
+    }
+
+    const price = parsePrice(product.priceText);
+    return {
+      storeId: store.id,
+      store: store.name,
+      productName: product.name,
+      price,
+      mrp: parsePrice(product.mrpText),
+      unit: inferUnit(product.text),
+      deliveryEta: store.eta,
+      productUrl: product.href,
+      searchUrl,
+      status: price === null ? "unavailable" : "live",
+      note: price === null ? "Zepto product card did not expose a price." : undefined,
       checkedAt: new Date().toISOString()
     };
   } finally {
@@ -867,6 +932,14 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function titleFromSlug(value: string): string {
+  return value
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word[0]?.toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
 function extractMicrodataProduct($: cheerio.CheerioAPI): { name: string; price: number | null; url: string | null } {
   const product = $("[itemscope][itemtype*='Product']").first();
   if (!product.length) return { name: "", price: null, url: null };
@@ -1107,6 +1180,8 @@ function productMatchScore(productName: string, query: string): number {
     let score = 50;
     if (title.startsWith(`${token} `) || title.startsWith(token)) score += 35;
     if (title.endsWith(` ${token}`) || title.endsWith(token)) score += 25;
+    if (token === "banana" && /\brobusta\b/i.test(title)) score += 35;
+    if (/\bfresh\b/i.test(title)) score += 15;
     if (
       /\b(chips|cookies?|biscuit|juice|cake|mix|snack|powder|flavour|flavored|dried|dry|dehydrated|storage|container|box|case|lunch|travel|plastic|holder)\b/i.test(
         title
