@@ -1129,11 +1129,14 @@ function cleanText(value: string): string {
 }
 
 function inferUnit(value: string): string | undefined {
-  return value.match(/\b\d+\s?(?:g|kg|ml|l|pcs|pack|piece)\b/i)?.[0];
+  const matches = Array.from(value.matchAll(/\b\d+(?:\.\d+)?\s?(?:g|kg|ml|l|ltr|litre|liter|pcs|pack|pieces?|piece)\b/gi)).map(
+    (match) => match[0]
+  );
+  return matches.find((match) => /\b(?:g|kg|ml|l|ltr|litre|liter)\b/i.test(match)) ?? matches[0];
 }
 
 function enforceComparableProducts(results: StoreResult[], request: CompareRequest): StoreResult[] {
-  const reference = results.find((result) => result.status === "live" && result.price !== null && isStrongProductMatch(result.productName, request.query));
+  const reference = selectComparableReference(results, request.query);
   if (!reference) return results;
 
   return results.map((result) => {
@@ -1151,22 +1154,46 @@ function enforceComparableProducts(results: StoreResult[], request: CompareReque
   });
 }
 
+function selectComparableReference(results: StoreResult[], query: string): StoreResult | undefined {
+  const candidates = results
+    .filter((result) => result.status === "live" && result.price !== null && isStrongProductMatch(result.productName, query))
+    .map((result) => ({ result, signature: productSignature(result.productName, result.unit) }));
+  if (!candidates.length) return undefined;
+
+  const clusters = new Map<string, { result: StoreResult; score: number; count: number }>();
+  candidates.forEach(({ result, signature }) => {
+    const key = comparableClusterKey(signature);
+    const score = productMatchScore(result.productName, query);
+    const cluster = clusters.get(key);
+    if (!cluster || score > cluster.score) {
+      clusters.set(key, { result, score, count: (cluster?.count ?? 0) + 1 });
+    } else {
+      cluster.count += 1;
+    }
+  });
+
+  return Array.from(clusters.values()).sort((a, b) => b.count - a.count || b.score - a.score)[0]?.result;
+}
+
+function comparableClusterKey(signature: ReturnType<typeof productSignature>): string {
+  const quantity = signature.quantity ? `${signature.quantity.unit}:${Math.round(signature.quantity.value)}` : "no-quantity";
+  return `${signature.format ?? "any-format"}|${quantity}`;
+}
+
 function productMismatchReason(reference: StoreResult, candidate: StoreResult, query: string): string | null {
   const ref = productSignature(reference.productName, reference.unit);
   const item = productSignature(candidate.productName, candidate.unit);
+  const queryTerms = meaningfulProductTerms(query);
+  const refVariantTerms = ref.variantTerms.filter((term) => !queryTerms.includes(term));
+  const itemVariantTerms = item.variantTerms.filter((term) => !queryTerms.includes(term));
 
   if (ref.format && item.format && ref.format !== item.format) {
     return `different format (${item.format} vs ${ref.format})`;
   }
 
-  if (ref.variant && item.variant && ref.variant !== item.variant) {
-    return `different variant (${titleCase(item.variant)} vs ${titleCase(ref.variant)})`;
-  }
-
-  const querySignature = productSignature(query);
-  if (querySignature.variant && item.variant && item.variant !== querySignature.variant) {
-    return `different variant (${titleCase(item.variant)} vs ${titleCase(querySignature.variant)})`;
-  }
+  const refOnly = refVariantTerms.find((term) => !itemVariantTerms.includes(term));
+  const itemOnly = itemVariantTerms.find((term) => !refVariantTerms.includes(term));
+  if (refOnly && itemOnly) return `different variant (${titleCase(itemOnly)} vs ${titleCase(refOnly)})`;
 
   if (ref.quantity && item.quantity && ref.quantity.unit === item.quantity.unit) {
     const ratio = item.quantity.value / ref.quantity.value;
@@ -1179,23 +1206,12 @@ function productMismatchReason(reference: StoreResult, candidate: StoreResult, q
 }
 
 function productSignature(name: string, unit?: string): {
-  variant?: string;
+  variantTerms: string[];
   format?: string;
   quantity?: { value: number; unit: string };
 } {
   const text = `${name} ${unit ?? ""}`.toLowerCase();
-  const variant = firstKnownToken(text, [
-    "original",
-    "lionpride",
-    "lion pride",
-    "nomad",
-    "amber",
-    "musk",
-    "swagger",
-    "captain",
-    "fresh",
-    "sport"
-  ]);
+  const variantTerms = extractVariantTerms(text);
   const quantity = parseQuantity(text);
   let format: string | undefined;
 
@@ -1203,26 +1219,78 @@ function productSignature(name: string, unit?: string): {
     format = "stick";
   } else if (/\broll[ -]?on\b/.test(text)) {
     format = "roll-on";
+  } else if (/\btetra\s?pack\b|\bcarton\b/.test(text)) {
+    format = "carton";
+  } else if (/\bpouch\b/.test(text)) {
+    format = "pouch";
   } else if (/\b(body\s*)?spray\b/.test(text) || (/\bdeodorant\b/.test(text) && quantity?.unit === "ml" && quantity.value >= 100)) {
     format = "spray";
   }
 
-  return { variant, format, quantity };
+  return { variantTerms, format, quantity };
 }
 
-function firstKnownToken(text: string, tokens: string[]): string | undefined {
-  return tokens.find((token) => new RegExp(`\\b${escapeRegExp(token)}\\b`, "i").test(text))?.replace(/\s+/g, " ");
+function extractVariantTerms(text: string): string[] {
+  return meaningfulProductTerms(text).slice(0, 8);
+}
+
+function meaningfulProductTerms(text: string): string[] {
+  const stopWords = new Set([
+    "add",
+    "and",
+    "body",
+    "buy",
+    "carton",
+    "combo",
+    "deodora",
+    "deodorant",
+    "for",
+    "free",
+    "freshness",
+    "gas",
+    "homogenised",
+    "homogenized",
+    "hour",
+    "long",
+    "lasting",
+    "men",
+    "mens",
+    "milk",
+    "mrp",
+    "no",
+    "off",
+    "pack",
+    "perfume",
+    "pouch",
+    "spray",
+    "stick",
+    "tetra",
+    "toned",
+    "with",
+    "women",
+    "womens"
+  ]);
+  const genericDescriptors = new Set(["classic", "fresh", "new", "premium", "regular"]);
+  const normalized = text
+    .replace(/men's|mens/g, "men")
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ml|l|g|kg|pcs|pieces?|pack)\b/gi, " ");
+  const tokens = normalized
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2 && !/\d/.test(token) && !stopWords.has(token) && !genericDescriptors.has(token));
+
+  return Array.from(new Set(tokens)).slice(0, 6);
 }
 
 function parseQuantity(text: string): { value: number; unit: string } | undefined {
-  const match = text.replace(/,/g, "").match(/\b(\d+(?:\.\d+)?)\s?(ml|l|g|kg|pcs|pieces?)\b/i);
+  const matches = Array.from(text.replace(/,/g, "").matchAll(/\b(\d+(?:\.\d+)?)\s?(ml|l|ltr|litre|liter|g|kg|pcs|pieces?|pack)\b/gi));
+  const match = matches.find((item) => /^(ml|l|ltr|litre|liter|g|kg)$/i.test(item[2])) ?? matches[0];
   if (!match) return undefined;
   const unit = match[2].toLowerCase().replace(/^pieces?$/, "pcs");
   let value = Number(match[1]);
   if (!Number.isFinite(value)) return undefined;
-  if (unit === "l") value *= 1000;
+  if (unit === "l" || unit === "ltr" || unit === "litre" || unit === "liter") value *= 1000;
   if (unit === "kg") value *= 1000;
-  return { value, unit: unit === "l" ? "ml" : unit === "kg" ? "g" : unit };
+  return { value, unit: unit === "l" || unit === "ltr" || unit === "litre" || unit === "liter" ? "ml" : unit === "kg" ? "g" : unit };
 }
 
 function formatQuantity(quantity: { value: number; unit: string }): string {
