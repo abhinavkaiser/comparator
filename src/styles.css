@@ -65,6 +65,9 @@ h1 {
 .summary,
 .best-strip,
 .search-panel,
+.db-panel,
+.product-list,
+.price-list,
 .row {
   border: 1px solid rgba(32, 32, 29, 0.12);
   box-shadow: 0 18px 50px rgba(32, 32, 29, 0.08);
@@ -94,6 +97,32 @@ h1 {
   padding: 16px;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 4px;
+  border: 1px solid rgba(32, 32, 29, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.tab {
+  height: 40px;
+  padding: 0 14px;
+  background: transparent;
+  color: #55554f;
+}
+
+.tab.active {
+  background: #237258;
+  color: #ffffff;
+}
+
+.tab svg {
+  width: 16px;
 }
 
 label {
@@ -188,6 +217,139 @@ button svg,
 .notice.error {
   background: #fff0ee;
   color: #a63b2d;
+}
+
+.db-panel {
+  padding: 16px;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.db-toolbar {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.icon-button {
+  min-width: 126px;
+}
+
+.db-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(420px, 1.6fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.product-list,
+.price-list {
+  min-height: 560px;
+  border-radius: 8px;
+  background: #fbfaf5;
+  box-shadow: none;
+}
+
+.db-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(32, 32, 29, 0.1);
+}
+
+.db-section-head strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #171714;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-section-head span {
+  color: #77766e;
+  font-size: 0.78rem;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.product-scroll,
+.price-scroll {
+  max-height: 600px;
+  overflow: auto;
+}
+
+.product-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  height: auto;
+  min-height: 64px;
+  padding: 12px 14px;
+  border-radius: 0;
+  border-bottom: 1px solid rgba(32, 32, 29, 0.08);
+  background: transparent;
+  color: #20201d;
+  text-align: left;
+}
+
+.product-item.active {
+  background: #e7f6ef;
+}
+
+.product-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-item span {
+  color: #77766e;
+  font-size: 0.78rem;
+}
+
+.price-table-head,
+.price-row {
+  display: grid;
+  grid-template-columns: 120px 120px 118px minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.price-table-head {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(32, 32, 29, 0.08);
+  color: #77766e;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.price-row {
+  min-height: 72px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(32, 32, 29, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.matched-product {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.matched-product span {
+  min-width: 0;
+  overflow: hidden;
+  color: #55554f;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .best-strip {
@@ -347,6 +509,10 @@ button svg,
   }
 
   .search-panel,
+  .db-toolbar,
+  .db-grid,
+  .price-table-head,
+  .price-row,
   .table-head,
   .row {
     grid-template-columns: 1fr;
@@ -358,5 +524,15 @@ button svg,
 
   .summary {
     width: fit-content;
+  }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .product-list,
+  .price-list {
+    min-height: 0;
   }
 }
