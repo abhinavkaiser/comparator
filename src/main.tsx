@@ -47,7 +47,7 @@ type ProductRow = {
   product_url: string;
 };
 
-type PriceRow = {
+type PriceCell = {
   product_id: number;
   scrape_run_id: number;
   store_id: string;
@@ -62,6 +62,18 @@ type PriceRow = {
   note: string | null;
   checked_at: string;
 };
+
+type ProductMatrixRow = ProductRow & {
+  prices: Record<string, PriceCell | undefined>;
+};
+
+const catalogStores = [
+  { id: "big-basket", name: "BigBasket" },
+  { id: "blinkit", name: "Blinkit" },
+  { id: "amazon-now", name: "Amazon Now" },
+  { id: "zepto", name: "Zepto" },
+  { id: "flipkart-minutes", name: "Flipkart Minutes" }
+];
 
 const formatter = new Intl.NumberFormat("en-IN", {
   style: "currency",
@@ -230,15 +242,11 @@ function App() {
 }
 
 function DatabaseView() {
-  const [products, setProducts] = useState<ProductRow[]>([]);
-  const [prices, setPrices] = useState<PriceRow[]>([]);
-  const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
+  const [products, setProducts] = useState<ProductMatrixRow[]>([]);
   const [productFilter, setProductFilter] = useState("");
   const [loadingProducts, setLoadingProducts] = useState(false);
-  const [loadingPrices, setLoadingPrices] = useState(false);
   const [dbError, setDbError] = useState("");
 
-  const selectedProduct = products.find((product) => product.id === selectedProductId) ?? null;
   const filteredProducts = useMemo(() => {
     const term = productFilter.trim().toLowerCase();
     if (!term) return products;
@@ -251,12 +259,10 @@ function DatabaseView() {
     setLoadingProducts(true);
     setDbError("");
     try {
-      const response = await fetch("/api/products?limit=300");
+      const response = await fetch("/api/catalog-prices?limit=500");
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? "Could not load products.");
-      const nextProducts: ProductRow[] = payload.products ?? [];
-      setProducts(nextProducts);
-      setSelectedProductId((current) => current ?? nextProducts[0]?.id ?? null);
+      setProducts(payload.products ?? []);
     } catch (caught) {
       setDbError(caught instanceof Error ? caught.message : "Could not load database.");
     } finally {
@@ -264,28 +270,9 @@ function DatabaseView() {
     }
   }
 
-  async function loadPrices(productId: number) {
-    setLoadingPrices(true);
-    setDbError("");
-    try {
-      const response = await fetch(`/api/products/${productId}/prices`);
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error ?? "Could not load prices.");
-      setPrices(payload.prices ?? []);
-    } catch (caught) {
-      setDbError(caught instanceof Error ? caught.message : "Could not load prices.");
-    } finally {
-      setLoadingPrices(false);
-    }
-  }
-
   useEffect(() => {
     loadProducts();
   }, []);
-
-  useEffect(() => {
-    if (selectedProductId) loadPrices(selectedProductId);
-  }, [selectedProductId]);
 
   return (
     <section className="db-panel">
@@ -314,67 +301,81 @@ function DatabaseView() {
         </div>
       )}
 
-      <div className="db-grid">
-        <section className="product-list" aria-label="Products">
-          <div className="db-section-head">
-            <strong>Products</strong>
-            <span>{filteredProducts.length} shown</span>
-          </div>
-          <div className="product-scroll">
-            {filteredProducts.map((product) => (
-              <button
-                className={product.id === selectedProductId ? "product-item active" : "product-item"}
-                key={product.id}
-                onClick={() => setSelectedProductId(product.id)}
-              >
-                <strong>{product.name}</strong>
+      <div className="matrix-wrap" aria-live="polite">
+        <div className="matrix-head">
+          <span>Product</span>
+          {catalogStores.map((store) => (
+            <span key={store.id}>{store.name}</span>
+          ))}
+        </div>
+        <div className="matrix-scroll">
+          {filteredProducts.map((product) => (
+            <article className="matrix-row" key={product.id}>
+              <div className="product-cell">
+                <strong title={product.name}>{product.name}</strong>
                 <span>
                   {product.category} · {product.unit ?? "unit unknown"}
                 </span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="price-list" aria-live="polite">
-          <div className="db-section-head">
-            <strong>{selectedProduct ? selectedProduct.name : "Prices"}</strong>
-            <span>{loadingPrices ? "Loading..." : `${prices.length} rows`}</span>
-          </div>
-          <div className="price-table-head">
-            <span>Store</span>
-            <span>Price</span>
-            <span>Status</span>
-            <span>Matched Product</span>
-          </div>
-          <div className="price-scroll">
-            {prices.map((price) => (
-              <article className="price-row" key={`${price.scrape_run_id}-${price.store_id}`}>
-                <strong>{price.store_name}</strong>
-                <div className="price-cell">
-                  <strong>{formatPrice(price.price)}</strong>
-                  {price.mrp ? <span>MRP {formatPrice(price.mrp)}</span> : null}
-                </div>
-                <div className={`badge ${price.status}`}>
-                  {price.status === "live" ? <CheckCircle2 aria-hidden="true" /> : <AlertCircle aria-hidden="true" />}
-                  {price.status}
-                </div>
-                <div className="matched-product">
-                  <span>{price.matched_name}</span>
-                  {price.product_url ? (
-                    <a className="row-link" href={price.product_url} target="_blank" rel="noreferrer">
-                      <ExternalLink aria-hidden="true" />
-                      Open
-                    </a>
-                  ) : null}
-                </div>
-                {price.note ? <p className="note">{price.note}</p> : null}
-              </article>
-            ))}
-          </div>
-        </section>
+                <a href={product.product_url} target="_blank" rel="noreferrer">
+                  <ExternalLink aria-hidden="true" />
+                  BigBasket source
+                </a>
+              </div>
+              {catalogStores.map((store) => (
+                <PriceMatrixCell cell={product.prices[store.id]} key={store.id} />
+              ))}
+            </article>
+          ))}
+          {!loadingProducts && filteredProducts.length === 0 ? (
+            <div className="empty-state">No products match that filter.</div>
+          ) : null}
+          {loadingProducts ? (
+            <div className="empty-state">
+              <Loader2 className="spin" aria-hidden="true" />
+              Loading database prices...
+            </div>
+          ) : null}
+        </div>
+        <div className="matrix-foot">
+          Showing {filteredProducts.length} products and {catalogStores.length} store columns.
+        </div>
       </div>
     </section>
+  );
+}
+
+function PriceMatrixCell({ cell }: { cell?: PriceCell }) {
+  if (!cell) {
+    return (
+      <div className="store-cell pending">
+        <strong>Not scraped</strong>
+        <span>No row yet</span>
+      </div>
+    );
+  }
+
+  const isLive = cell.status === "live" && typeof cell.price === "number";
+
+  return (
+    <div className={isLive ? "store-cell live" : "store-cell unavailable"}>
+      <div className="cell-top">
+        <strong>{formatPrice(cell.price)}</strong>
+        <span className={`mini-badge ${cell.status}`}>{cell.status}</span>
+      </div>
+      {cell.mrp ? <span>MRP {formatPrice(cell.mrp)}</span> : null}
+      <span className="cell-match" title={cell.matched_name}>
+        {cell.matched_name}
+      </span>
+      <div className="cell-actions">
+        {cell.product_url ? (
+          <a href={cell.product_url} target="_blank" rel="noreferrer">
+            <ExternalLink aria-hidden="true" />
+            Open
+          </a>
+        ) : null}
+        {cell.note ? <span title={cell.note}>Note</span> : null}
+      </div>
+    </div>
   );
 }
 

@@ -36,6 +36,20 @@ app.get("/api/products", (req, res) => {
   res.json({ products: db.listProducts(limit) });
 });
 
+app.get("/api/catalog-prices", (req, res) => {
+  const limit = req.query.limit ? Number(req.query.limit) : 500;
+  res.json({
+    stores: [
+      { id: "big-basket", name: "BigBasket" },
+      { id: "blinkit", name: "Blinkit" },
+      { id: "amazon-now", name: "Amazon Now" },
+      { id: "zepto", name: "Zepto" },
+      { id: "flipkart-minutes", name: "Flipkart Minutes" }
+    ],
+    products: db.listProductPriceMatrix(limit)
+  });
+});
+
 app.get("/api/products/:id/prices", (req, res) => {
   const productId = Number(req.params.id);
   if (!Number.isFinite(productId)) {

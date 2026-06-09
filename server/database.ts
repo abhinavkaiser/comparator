@@ -42,6 +42,26 @@ export type ProductRow = {
   product_url: string;
 };
 
+export type StorePriceCell = {
+  product_id: number;
+  scrape_run_id: number;
+  store_id: string;
+  store_name: string;
+  matched_name: string;
+  price: number | null;
+  mrp: number | null;
+  unit: string | null;
+  product_url: string | null;
+  search_url: string;
+  status: "live" | "demo" | "unavailable";
+  note: string | null;
+  checked_at: string;
+};
+
+export type ProductPriceMatrixRow = ProductRow & {
+  prices: Record<string, StorePriceCell>;
+};
+
 export type ScrapeRun = {
   id: number;
   startedAt: string;
@@ -183,6 +203,57 @@ export class CatalogDatabase {
       `
       )
       .all(productId);
+  }
+
+  listProductPriceMatrix(limit?: number): ProductPriceMatrixRow[] {
+    const products = this.listProducts(limit);
+    if (!products.length) return [];
+
+    const placeholders = products.map(() => "?").join(", ");
+    const prices = this.db
+      .prepare(
+        `
+        SELECT
+          product_id,
+          scrape_run_id,
+          store_id,
+          store_name,
+          matched_name,
+          price,
+          mrp,
+          unit,
+          product_url,
+          search_url,
+          status,
+          note,
+          checked_at
+        FROM (
+          SELECT
+            sp.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY sp.product_id, sp.store_id
+              ORDER BY sp.scrape_run_id DESC, sp.checked_at DESC, sp.id DESC
+            ) AS latest_rank
+          FROM store_prices sp
+          WHERE sp.product_id IN (${placeholders})
+        )
+        WHERE latest_rank = 1
+        ORDER BY product_id, store_name
+      `
+      )
+      .all(...products.map((product) => product.id)) as StorePriceCell[];
+
+    const pricesByProduct = new Map<number, Record<string, StorePriceCell>>();
+    for (const price of prices) {
+      const current = pricesByProduct.get(price.product_id) ?? {};
+      current[price.store_id] = price;
+      pricesByProduct.set(price.product_id, current);
+    }
+
+    return products.map((product) => ({
+      ...product,
+      prices: pricesByProduct.get(product.id) ?? {}
+    }));
   }
 
   createRun(categories: string[]): ScrapeRun {

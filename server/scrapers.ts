@@ -1148,6 +1148,7 @@ function enforceComparableProducts(results: StoreResult[], request: CompareReque
       ...result,
       price: null,
       mrp: null,
+      productUrl: null,
       status: "unavailable",
       note: `Not available as a comparable item: ${mismatch}.`
     };
@@ -1181,6 +1182,10 @@ function comparableClusterKey(signature: ReturnType<typeof productSignature>): s
 }
 
 function productMismatchReason(reference: StoreResult, candidate: StoreResult, query: string): string | null {
+  if (!isStrongProductMatch(candidate.productName, query)) {
+    return "product name does not closely match the searched item";
+  }
+
   const ref = productSignature(reference.productName, reference.unit);
   const item = productSignature(candidate.productName, candidate.unit);
   const queryTerms = meaningfulProductTerms(query);
