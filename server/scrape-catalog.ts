@@ -1,5 +1,5 @@
 import { openDatabase, type SeedProduct } from "./database.js";
-import { comparePrices, type StoreResult } from "./scrapers.js";
+import { comparePrices, type StoreId, type StoreResult } from "./scrapers.js";
 
 const browserUserAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36";
@@ -15,12 +15,21 @@ const offsetProducts = Number(process.env.OFFSET_PRODUCTS ?? 0);
 const skipOtherStores = process.env.SKIP_OTHER_STORES === "1";
 const bigBasketPageDelayMs = Number(process.env.BIGBASKET_PAGE_DELAY_MS ?? 1200);
 const priceExisting = process.env.PRICE_EXISTING === "1";
+const storeNames: Record<StoreId, string> = {
+  blinkit: "Blinkit",
+  "amazon-now": "Amazon Now",
+  zepto: "Zepto",
+  "big-basket": "BigBasket",
+  "flipkart-minutes": "Flipkart Minutes"
+};
+const selectedStoreIds = parseStoreIds(process.env.STORES);
 
 async function main() {
   const db = openDatabase();
   const run = db.createRun(categories);
   console.log(`Database: ${db.path}`);
   console.log(`Scrape run ${run.id} started for ${categories.join(", ")} at pincode ${pincode}`);
+  if (selectedStoreIds) console.log(`Store filter: ${selectedStoreIds.join(", ")}`);
 
   try {
     if (priceExisting) {
@@ -35,7 +44,7 @@ async function main() {
         index += 1;
         const query = cleanText(`${product.brand} ${product.name} ${product.unit ?? ""}`);
         console.log(`[${index}/${products.length}] Pricing: ${query}`);
-        const comparison = await comparePrices({ query, pincode });
+        const comparison = await comparePrices({ query, pincode, storeIds: selectedStoreIds });
         comparison.results.forEach((result) => db.recordPrice(product.id, run.id, result));
       }
 
@@ -72,16 +81,15 @@ async function main() {
         console.log(`[${index}/${selectedProducts.length}] Pricing: ${query}`);
 
         try {
-          const comparison = await comparePrices({ query, pincode });
+          const comparison = await comparePrices({ query, pincode, storeIds: selectedStoreIds });
           comparison.results
             .filter((result) => result.storeId !== "big-basket")
             .forEach((result) => db.recordPrice(productId, run.id, result));
         } catch (error) {
           const note = error instanceof Error ? error.message : "Price scrape failed.";
-          db.recordPrice(productId, run.id, failedPriceResult("blinkit", "Blinkit", query, note));
-          db.recordPrice(productId, run.id, failedPriceResult("amazon-now", "Amazon Now", query, note));
-          db.recordPrice(productId, run.id, failedPriceResult("zepto", "Zepto", query, note));
-          db.recordPrice(productId, run.id, failedPriceResult("flipkart-minutes", "Flipkart Minutes", query, note));
+          failedStores(selectedStoreIds).forEach((storeId) => {
+            db.recordPrice(productId, run.id, failedPriceResult(storeId, storeNames[storeId], query, note));
+          });
         }
       }
     }
@@ -95,6 +103,24 @@ async function main() {
     db.finishRun(run.id, "failed", note);
     throw error;
   }
+}
+
+function parseStoreIds(value: string | undefined): StoreId[] | undefined {
+  if (!value) return undefined;
+  const valid = new Set(Object.keys(storeNames));
+  const parsed = value
+    .split(",")
+    .map((store) => store.trim().toLowerCase())
+    .filter(Boolean);
+  const invalid = parsed.filter((store) => !valid.has(store));
+  if (invalid.length) {
+    throw new Error(`Invalid STORES value: ${invalid.join(", ")}. Use one or more of: ${Array.from(valid).join(", ")}.`);
+  }
+  return parsed as StoreId[];
+}
+
+function failedStores(storeIds: StoreId[] | undefined): StoreId[] {
+  return (storeIds ?? ["blinkit", "amazon-now", "zepto", "flipkart-minutes"]).filter((storeId) => storeId !== "big-basket");
 }
 
 async function scrapeBigBasketSeedProducts(categoryNames: string[], pageLimit: number): Promise<SeedProduct[]> {

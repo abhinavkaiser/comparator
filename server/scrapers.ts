@@ -1,12 +1,13 @@
 import * as cheerio from "cheerio";
 import { chromium } from "playwright";
 
-type StoreId = "blinkit" | "amazon-now" | "zepto" | "big-basket" | "flipkart-minutes";
+export type StoreId = "blinkit" | "amazon-now" | "zepto" | "big-basket" | "flipkart-minutes";
 
 export type CompareRequest = {
   query: string;
   pincode?: string;
   exactUrls?: Partial<Record<StoreId, string>>;
+  storeIds?: StoreId[];
 };
 
 export type StoreResult = {
@@ -94,12 +95,13 @@ const stores: StoreConfig[] = [
 ];
 
 export async function comparePrices(request: CompareRequest): Promise<CompareResponse> {
-  const settled = await Promise.allSettled(stores.map((store) => scrapeStore(store, request)));
+  const selectedStores = request.storeIds?.length ? stores.filter((store) => request.storeIds?.includes(store.id)) : stores;
+  const settled = await Promise.allSettled(selectedStores.map((store) => scrapeStore(store, request)));
   const results = settled.map((item, index) => {
     if (item.status === "fulfilled") return item.value;
-    return unavailableResult(stores[index], request, item.reason instanceof Error ? item.reason.message : undefined);
+    return unavailableResult(selectedStores[index], request, item.reason instanceof Error ? item.reason.message : undefined);
   });
-  const comparableResults = enforceComparableProducts(results, request);
+  const comparableResults = enforceComparableProducts(results, request).map((result) => enforceQueryMatch(result, request.query));
 
   const liveWithPrice = comparableResults.filter((result) => result.status === "live" && typeof result.price === "number");
   const best = liveWithPrice.reduce<StoreResult | undefined>((current, result) => {
@@ -112,6 +114,19 @@ export async function comparePrices(request: CompareRequest): Promise<CompareRes
     pincode: request.pincode,
     bestStoreId: best?.storeId,
     results: comparableResults.sort((a, b) => Number(a.price ?? Infinity) - Number(b.price ?? Infinity))
+  };
+}
+
+function enforceQueryMatch(result: StoreResult, query: string): StoreResult {
+  if (result.status !== "live" || result.price === null || isStrongProductMatch(result.productName, query)) return result;
+
+  return {
+    ...result,
+    price: null,
+    mrp: null,
+    productUrl: null,
+    status: "unavailable",
+    note: "Not available as a comparable item: product name does not closely match the searched item."
   };
 }
 
